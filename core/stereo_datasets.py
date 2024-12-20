@@ -205,7 +205,7 @@ class SceneFlowDatasets(StereoDataset):
 
     def _add_things(self, split='TRAIN'):
         """ Add FlyingThings3D data """
-
+        print('add things function')
         original_length = len(self.disparity_list)
         root = osp.join(self.root, 'FlyingThings3D')
         left_images = sorted(glob(osp.join(root, self.dstype, split, '*/*/left/*.png')))
@@ -427,11 +427,14 @@ def fetch_dataloader(args, occ_mask):
         if dataset_name.startswith("middlebury_"):
             new_dataset = Middlebury(aug_params, split=dataset_name.replace('middlebury_', ''))
         elif dataset_name == 'sceneflow':
+            print('clean_dataset')
             clean_dataset = SceneFlowDatasets(aug_params, dstype='frames_cleanpass', occ_mask=occ_mask,
                                               load_right_disp=load_right_disp)
+            print('final_dataset')
             final_dataset = SceneFlowDatasets(aug_params, dstype='frames_finalpass', occ_mask=occ_mask,
                                               load_right_disp=load_right_disp)
             new_dataset = (clean_dataset * 4) + (final_dataset * 4)
+            print('new_dataset')
             logging.info(f"Adding {len(new_dataset)} samples from SceneFlow")
         elif dataset_name == 'kitti':
             new_dataset = KITTI(aug_params, val_set=args.valid_set) * 5
@@ -449,7 +452,7 @@ def fetch_dataloader(args, occ_mask):
             logging.info(f"Adding {len(new_dataset)} samples from ETH3D")
 
         train_dataset = new_dataset if train_dataset is None else train_dataset + new_dataset
-
+    print('data loader')
     train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size,  # 28 * 4
                                    pin_memory=True, shuffle=True, num_workers=24, prefetch_factor=4, drop_last=True)
 

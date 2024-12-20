@@ -156,9 +156,9 @@ def validate_kitti(model, iters=32, mixed_prec=False, device=[0], val_set=None, 
 def validate_things(model, iters=32, mixed_prec=False, device=[0], version='frames_finalpass'):
     """ Perform validation using the FlyingThings3D (TEST) split """
     model.eval()
-    val_dataset = datasets.SceneFlowDatasets(dstype=version, things_test=True)
+    val_dataset = datasets.SceneFlowDatasets(root ='/media/goldberg/T91/Datasets/sceneflow', dstype=version, things_test=True)
 
-    out_list, epe_list = [], []
+    out_list, epe_list, elapsed_list = [], [], []
     for val_id in tqdm(range(len(val_dataset))):
         _, image1, image2, disp_gt, valid_gt = val_dataset[val_id]
         image1 = image1[None].cuda(device[0])  # 相当于把第一个N维度扩展了
@@ -167,8 +167,15 @@ def validate_things(model, iters=32, mixed_prec=False, device=[0], version='fram
         padder = InputPadder(image1.shape, divis_by=32)
         image1, image2 = padder.pad(image1, image2)
 
-        with autocast(enabled=mixed_prec):
+        torch.cuda.synchronize()
+        start = time.time()
+        with autocast('cuda', enabled=mixed_prec):
             disp_pr = model(image1, image2, iters=iters, test_mode=True)
+        torch.cuda.synchronize()
+        end = time.time()
+
+        elapsed_list.append(end - start)
+
         disp_pr = padder.unpad(disp_pr).cpu().squeeze(0)  # 1,1,h,w
         assert disp_pr.shape == disp_gt.shape, (disp_pr.shape, disp_gt.shape)
         epe = (disp_pr - disp_gt).abs()
@@ -184,12 +191,15 @@ def validate_things(model, iters=32, mixed_prec=False, device=[0], version='fram
         # out_list.append(out[val].cpu().numpy())
 
     epe_list = np.array(epe_list)
+    elapsed_list = np.array(elapsed_list)
     # out_list = np.concatenate(out_list)
 
     epe = np.mean(epe_list)
+    mean_runtime = np.mean(elapsed_list[1:])
     # d1 = 100 * np.mean(out_list)
 
-    print("Validation FlyingThings: %f" % (epe))
+    print(
+        f"Validation FlyingThings: EPE {format(epe, '.3f')}, {format(1 / mean_runtime, '.2f')}-Time ({format(mean_runtime, '.3f')}s)")
     return {'things-epe': epe}
 
 

@@ -7,9 +7,10 @@ from core.extractor import MultiBasicEncoder, ResidualBlock
 from core.corr import CorrBlock1D
 from core.utils.utils import coords_grid
 from core.refinement import refineNet
+DEBUG = False
 
 try:
-    autocast = torch.cuda.amp.autocast
+    autocast = torch.amp.autocast
 except:
     # dummy autocast for PyTorch < 1.6
     class autocast:
@@ -73,12 +74,18 @@ class PCVNet(nn.Module):
         return up_x.reshape(n, d, factor * h, factor * w)
 
     def forward(self, image1, image2, iters=12, test_mode=False, init_param=None, cascade=False):
+        if DEBUG:
+            print('------------------------------------------------------------------------------------------')
+            print('Forward function of the model ...')
         self.test_mode = test_mode
         image1 = (2 * (image1 / 255.0) - 1.0).contiguous()
         image2 = (2 * (image2 / 255.0) - 1.0).contiguous()
 
+        if DEBUG:
+            print('Image shapes', image1.shape, image2.shape)
+
         # feature extraction
-        with autocast(enabled=self.args.mixed_precision):
+        with autocast('cuda', enabled=self.args.mixed_precision):
             *cnet_list, x, low_f = self.cnet(torch.cat((image1, image2), dim=0), dual_inp=True,
                                              num_layers=self.args.n_gru_layers)
             fmap1, fmap2 = self.conv2(x).split(dim=0, split_size=x.shape[0] // 2)
@@ -86,6 +93,10 @@ class PCVNet(nn.Module):
             inp_list = [torch.relu(f[1]) for f in cnet_list]
             inp_list = [list(conv(i).split(split_size=conv.out_channels // 3, dim=1)) for i, conv in
                         zip(inp_list, self.context_zqr_convs)]
+        if DEBUG:
+            print(f'fmap1 {fmap1.shape}, fmap2 {fmap2.shape}')
+            # print(f'cnet_list {cnet_list[0].shape}, x {x.shape}, low_f {low_f.shape}')
+            print(f'net_list {net_list[0].shape}, inp_list {inp_list[0][0].shape}')
 
         # correlation
         N, C, H, W = net_list[0].shape
@@ -105,6 +116,8 @@ class PCVNet(nn.Module):
             coords1 = coords0 - mu
         else:
             coords0, coords1 = self.initialize_disp(fmap1)
+            if DEBUG:
+                print(f'coords0 {coords0.shape}, coords1 {coords1.shape} after first initialization')
             N, C, H, W = net_list[0].shape
             sigma = torch.ones(N, self.args.gauss_num, H, W).to(
                 coords0.device) * self.args.init_sigma / (
@@ -118,11 +131,15 @@ class PCVNet(nn.Module):
 
         # iterative update
         for itr in range(iters):
+            if DEBUG:
+                print(f'iteration {itr}')
             coords1 = coords1.detach()
             corr = corr_fn(coords1, sigma, self.test_mode)
             mu = (coords0 - coords1).detach()
+            if DEBUG:
+                print(f'mu {mu.shape}')
             motion_features_list = None
-            with autocast(enabled=self.args.mixed_precision):
+            with autocast('cuda', enabled=self.args.mixed_precision):
                 if self.args.n_gru_layers >= 3 and self.args.slow_fast_gru:
                     net_list, motion_features_list = self.FDM(net_list, inp_list, corr, mu.detach(), w=w.detach(),
                                                               sigma=sigma.detach(),
@@ -145,6 +162,8 @@ class PCVNet(nn.Module):
                                                            iter04=True,
                                                            test_mode=(test_mode and itr < iters - 1),
                                                            motion_features_list=motion_features_list)
+                if DEBUG:
+                    print(f'After GRU layers net_list[0]: {net_list[0].shape} up_mask: {up_mask.shape}, mu: {mu.shape}, sigma: {sigma.shape}, w: {w.shape}')
 
             coords1 = coords0 - mu
             if test_mode and itr < iters - 1:
@@ -152,10 +171,12 @@ class PCVNet(nn.Module):
 
             # disparity regression
             disp = torch.sum(w * mu, dim=1, keepdim=True)
+            if DEBUG:
+                print('disp= sum(w*mu)', disp.shape)
 
             # refinement
             if itr == self.args.valid_iters - 1:
-                with autocast(enabled=self.args.mixed_precision):
+                with autocast('cuda', enabled=self.args.mixed_precision):
                     refined_disp = self.refineNet(w.detach(), sigma.detach(),
                                                   mu.detach(),
                                                   disp.detach(), low_f)
@@ -177,6 +198,8 @@ class PCVNet(nn.Module):
             disp_seqs.append(disp_up)
             sigma_seqs.append(sigma_up)
             w_seqs.append(w_up)
+            if DEBUG:
+                print(f'disp_up {disp_up.shape}, mu_up {mu_up.shape}, sigma_up {sigma_up.shape}, w_up {w_up.shape}')
 
         if cascade:
             init_params={'disp': disp_up,

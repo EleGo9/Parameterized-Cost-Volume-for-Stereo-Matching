@@ -1,9 +1,9 @@
 python train_stereo.py \
 --mixed_precision \
---batch_size 16 \
+--batch_size 1 \
 --train_datasets sceneflow \
 --lr 0.0002 \
---num_steps 200000 \
+--num_steps 200 \ #200000
 --train_iters 6 \
 --valid_iters 4 \
 --valid_freq 10000 \

@@ -13,9 +13,10 @@ import torch.nn.functional as F
 from evaluate_stereo import validate
 import core.stereo_datasets as datasets
 from core.utils.data_parallel import BalancedDataParallel
+DEBUG = False
 
 try:
-    from torch.cuda.amp import GradScaler
+    from torch.amp import GradScaler
 except:
     # dummy GradScaler for PyTorch < 1.6
     class GradScaler:
@@ -74,15 +75,18 @@ def sequence_loss(disp_refine, final_disp_preds, mu_preds, w_preds, sigma_preds,
             w_preds[i] = w_preds[i].view(N // gauss_num, gauss_num, 1, H, W)
             sigma_preds[i] = sigma_preds[i].view(N // gauss_num, gauss_num, 1, H, W)
             w = w_preds[i]
-            print("mu%d:" % i, torch.mean(mu_preds[i], dim=[0, 2, 3, 4]).detach())
-            print("w%d:" % i, torch.mean(w, dim=[0, 2, 3, 4]).detach())
-            print("sigma%d:" % i, torch.mean(sigma_preds[i], dim=[0, 2, 3, 4]).detach())
+            # print("mu%d:" % i, torch.mean(mu_preds[i], dim=[0, 2, 3, 4]).detach())
+            # print("w%d:" % i, torch.mean(w, dim=[0, 2, 3, 4]).detach())
+            # print("sigma%d:" % i, torch.mean(sigma_preds[i], dim=[0, 2, 3, 4]).detach())
 
             i_loss1 = (final_disp_preds[i] - disp_gt).abs()
             i_loss2 = torch.mean((mu_preds[i] - disp_gt[:, None]).abs(), dim=1)
             disp_loss += i_weights[i] * (
                     i_loss1.view(-1)[valid.view(-1)].mean() + i_loss2.view(-1)[valid.view(-1)].mean())
+            # print('i_weights[i] * (i_loss1.view(-1)[valid.view(-1)].mean() + i_loss2.view(-1)[valid.view(-1)].mean())',i_weights[i] * (
+                    # i_loss1.view(-1)[valid.view(-1)].mean() + i_loss2.view(-1)[valid.view(-1)].mean()))
         disp_loss += 1.4 * F.smooth_l1_loss(disp_refine[valid], disp_gt[valid], size_average=True)
+        # print('F.smooth_l1_loss(disp_refine[valid], disp_gt[valid], size_average=True)', F.smooth_l1_loss(disp_refine[valid], disp_gt[valid], size_average=True))
 
         epe_final = torch.abs(disp_refine - disp_gt)
         epe_final = epe_final.view(-1)[valid.view(-1)]
@@ -106,6 +110,10 @@ def sequence_loss(disp_refine, final_disp_preds, mu_preds, w_preds, sigma_preds,
             'bad2_final': (epe_final > 2).float().mean().item(),
             'bad5_final': (epe_final > 5).float().mean().item(),
         }
+
+    # print('Inside sequence loss')
+    # print('disp_loss:', disp_loss)
+    # print('metrics:', metrics)
 
     return disp_loss, metrics
 
@@ -190,11 +198,11 @@ def train(args):
     val_idxs = set(np.random.permutation(200)[:40])
     np.random.set_state(state)
     args.valid_set = val_idxs
-
+    print('Train Loader ...')
     train_loader = datasets.fetch_dataloader(args, occ_mask=False)
     optimizer, scheduler = fetch_optimizer(args, model)
     logger = Logger(model, scheduler, args.log_freq)
-    scaler = GradScaler(enabled=args.mixed_precision)
+    scaler = GradScaler('cuda', enabled=args.mixed_precision)
 
     # load checkpoint
     if args.restore_ckpt is not None:
@@ -229,10 +237,13 @@ def train(args):
     gauss_num_train = args.gauss_num
     best_metric = float('inf')
     # training
+    print('Start training. ')
     while should_keep_training:
         for i_batch, (files_path, *data_blob) in enumerate(tqdm(train_loader)):
             optimizer.zero_grad()
             image1, image2, disp, valid = [x.cuda(args.device[0]) for x in data_blob]
+            # print('image1', image1.shape)
+            # print('image2', image2.shape)
 
             if args.cascade:
                 image1_dw2 = F.interpolate(image1, scale_factor=(0.5, 0.5), mode='bilinear', align_corners=True)
@@ -243,6 +254,8 @@ def train(args):
 
             assert model.training
             output_list = model(image1, image2, iters=args.train_iters, init_param=init_param)
+            # print('output list', len(output_list))
+            # print(output_list[0], output_list[1], output_list[2], output_list[3], output_list[4])   
             assert model.training
 
             # calculate loss
@@ -256,20 +269,27 @@ def train(args):
                 loss += 0.5 * loss_dw2
             else:
                 loss, metrics = sequence_loss(*output_list, disp, valid, gauss_num_train, args.max_disp)
+            
 
             # log
             logger.push(metrics)
-            logger.writer.log({"live_loss": loss.item(), 'learning_rate': optimizer.param_groups[0]['lr']})
+            try:
+                logger.writer.log({"live_loss": loss.item(), 'learning_rate': optimizer.param_groups[0]['lr']})
+            except:
+                logger.writer.log({"live_loss": loss, 'learning_rate': optimizer.param_groups[0]['lr']})
 
-            # gradient scaling
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            # # gradient scaling
+            # print('Loss before scale(loss)', loss)
+            # print('try loss item', loss.item())
+            if loss != 0:
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 
-            # backward
-            scaler.step(optimizer)
-            scheduler.step()
-            scaler.update()
+                # backward
+                scaler.step(optimizer)
+                scheduler.step()
+                scaler.update()
 
             # validation
             if total_steps % validation_frequency == validation_frequency - 1:
@@ -359,7 +379,7 @@ if __name__ == '__main__':
     wandb.init(
         job_type="train",
         project=args.name,
-        entity="zengjiaxi"
+        entity="elenagovi0-universit-di-modena-e-reggio-emilia"
     )
     # add the args to wandb
     wandb.config.update(args)
