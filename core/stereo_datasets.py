@@ -187,6 +187,37 @@ class StereoDataset(data.Dataset):
     def __len__(self):
         return len(self.image_list)
 
+class CemStereoDataset(StereoDataset):
+    def __init__(self, aug_params=None, root='datasets', load_right_disp=False):
+        super(CemStereoDataset, self).__init__(aug_params, load_right_disp=load_right_disp)
+        self.root = root
+
+    def _add_cem(self):
+        original_length = len(self.disparity_list)
+        root = osp.join(self.root, 'cem_stereo_pcvnet')
+        left_images = sorted(glob(osp.join(root, 'rgb/left/*.png')))
+        right_images = [im.replace('left', 'right') for im in left_images]
+        disparity_images = [im.replace('disparity').replace('.png', '.pfm') for im in left_images]
+        # right_disparity_images = [im.replace('disparity').replace('.png', '.pfm') for im in right_images]
+
+        # Choose a random subset of 400 images for validation
+        state = np.random.get_state()
+        np.random.seed(1000)
+        # val_idxs = set(np.random.permutation(len(left_images))[:400])
+        np.random.set_state(state)
+
+        for idx, (img1, img2, disp) in enumerate(
+                zip(left_images, right_images, disparity_images)):
+                # if (split == 'TEST' and idx in val_idxs) or split == 'TRAIN':
+                # if (split == 'TEST') or split == 'TRAIN':
+                self.image_list += [[img1, img2]]
+                self.disparity_list += [disp]
+                # self.right_disparity_list += [disp_r]
+        logging.info(f"Added {len(self.disparity_list) - original_length} from Cem Stereo")
+
+
+
+
 
 class SceneFlowDatasets(StereoDataset):
     def __init__(self, aug_params=None, root='datasets', dstype='frames_cleanpass', things_test=False, occ_mask=False,
@@ -427,9 +458,9 @@ def fetch_dataloader(args, occ_mask):
         if dataset_name.startswith("middlebury_"):
             new_dataset = Middlebury(aug_params, split=dataset_name.replace('middlebury_', ''))
         elif dataset_name == 'sceneflow':
-            clean_dataset = SceneFlowDatasets(aug_params, dstype='frames_cleanpass', occ_mask=occ_mask,
+            clean_dataset = SceneFlowDatasets(aug_params, root='/media/goldberg/T9/Datasets/sceneflow/', dstype='frames_cleanpass', occ_mask=occ_mask,
                                               load_right_disp=load_right_disp)
-            final_dataset = SceneFlowDatasets(aug_params, dstype='frames_finalpass', occ_mask=occ_mask,
+            final_dataset = SceneFlowDatasets(aug_params, root='/media/goldberg/T9/Datasets/sceneflow/', dstype='frames_finalpass', occ_mask=occ_mask,
                                               load_right_disp=load_right_disp)
             new_dataset = (clean_dataset * 4) + (final_dataset * 4)
             logging.info(f"Adding {len(new_dataset)} samples from SceneFlow")
@@ -441,6 +472,9 @@ def fetch_dataloader(args, occ_mask):
             # aug_params['max_scale'] = -0.8  # 1/2
             new_dataset = Booster(aug_params, load_right_disp=load_right_disp) * 10 * 10  #
             logging.info(f"Adding {len(new_dataset)} samples from Booster")
+        elif dataset_name == 'cemstereo':
+            new_dataset = CemStereoDataset(aug_params)*2
+            logging.info(f"Adding {len(new_dataset)} samples from CemStereo")
         elif dataset_name == 'crestereo':
             new_dataset = Crestereo(aug_params, load_right_disp=load_right_disp) * 2
             logging.info(f"Adding {len(new_dataset)} samples from CreStereo")

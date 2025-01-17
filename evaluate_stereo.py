@@ -156,7 +156,7 @@ def validate_kitti(model, iters=32, mixed_prec=False, device=[0], val_set=None, 
 def validate_things(model, iters=32, mixed_prec=False, device=[0], version='frames_finalpass'):
     """ Perform validation using the FlyingThings3D (TEST) split """
     model.eval()
-    val_dataset = datasets.SceneFlowDatasets(dstype=version, things_test=True)
+    val_dataset = datasets.SceneFlowDatasets(dstype=version,root='/media/goldberg/T9/Datasets/sceneflow', things_test=True)
 
     out_list, epe_list = [], []
     for val_id in tqdm(range(len(val_dataset))):
@@ -168,10 +168,28 @@ def validate_things(model, iters=32, mixed_prec=False, device=[0], version='fram
         image1, image2 = padder.pad(image1, image2)
 
         with autocast(enabled=mixed_prec):
-            disp_pr = model(image1, image2, iters=iters, test_mode=True)
-        disp_pr = padder.unpad(disp_pr).cpu().squeeze(0)  # 1,1,h,w
-        assert disp_pr.shape == disp_gt.shape, (disp_pr.shape, disp_gt.shape)
-        epe = (disp_pr - disp_gt).abs()
+            stereo_disp, disp2, disp3, disp4, disp5 = model(image1, image2, iters=iters, test_mode=True)
+        stereo_disp = padder.unpad(stereo_disp).cpu().squeeze(0)  # 1,1,h,w
+        # assert disp_pr.shape == disp_gt.shape, (disp_pr.shape, disp_gt.shape)
+        epe = (stereo_disp - disp_gt).abs()
+        # metrics = {
+        #         # 'epe': epe.mean().item(),
+        #         # '1px': (epe < 1).float().mean().item(),
+        #         # '3px': (epe < 3).float().mean().item(),
+        #         # '5px': (epe < 5).float().mean().item(),
+        #         # 'bad1': (epe > 1).float().mean().item(),
+        #         # 'bad2': (epe > 2).float().mean().item(),
+        #         # 'bad5': (epe > 5).float().mean().item(),
+        #         'epe_final': epe_final.mean().item(),
+        #         '1px_final': (epe_final < 1).float().mean().item(),
+        #         '3px_final': (epe_final < 3).float().mean().item(),
+        #         '5px_final': (epe_final < 5).float().mean().item(),
+        #         'bad1_final': (epe_final > 1).float().mean().item(),
+        #         'bad2_final': (epe_final > 2).float().mean().item(),
+        #         'bad5_final': (epe_final > 5).float().mean().item(),
+        #     }
+
+        # epe = (disp_pr - disp_gt).abs()
 
         epe = epe.flatten()
         val = (disp_gt.abs().flatten() < 192)
