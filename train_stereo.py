@@ -9,6 +9,7 @@ from tqdm import tqdm
 from pathlib import Path
 import torch.optim as optim
 from core.model import PCVNet
+from core.model_stereo_hda import StereoHDA
 import torch.nn.functional as F
 from evaluate_stereo import validate
 import core.stereo_datasets as datasets
@@ -359,7 +360,7 @@ if __name__ == '__main__':
     wandb.init(
         job_type="train",
         project=args.name,
-        entity="zengjiaxi"
+        entity="elenagovi0-universit-di-modena-e-reggio-emilia"
     )
     # add the args to wandb
     wandb.config.update(args)
